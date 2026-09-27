@@ -3,6 +3,10 @@
 input: SIRDS
 output: heightmap and pattern
 
+### TODO
+
+next plan step, unknown input period, optimize (webGL) and make gui apply changes immediately
+
 ### these projects
 
 SIRDS https://github.com/luncat8/SIRDS-stereo-image.git
@@ -22,6 +26,12 @@ recovered from the rebuilt per-row link table.
 
 `index.html` shows input / stereogram / recovered height / error / recovered
 pattern side by side, and takes an external image for a reverse-only run.
+
+### recovered results screenshots of torus height with different input noise grain size of SIRDS (bigger grain = worse result)
+
+<img align="top" src="1.webp" width="400"> <img align="top" src="2.webp" width="400"> <img align="top" src="3.webp" width="400">
+
+input | stereogram | recovered height
 
 ### found
 

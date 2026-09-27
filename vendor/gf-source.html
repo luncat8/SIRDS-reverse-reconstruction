@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>SIRDS Stereogram Generator</title>
+	<style>
+		* { box-sizing: border-box; }
+		:root { --canvas-max-h: 64vh; }
+		body {
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+			background-color: #1a1a1a;
+			color: #e0e0e0;
+			margin: 0;
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			height: 100vh;
+		}
+		.title-row { display: flex; align-items: baseline; justify-content: center; gap: 14px; flex-wrap: wrap; padding-right: 170px; }
+		.title-row h3 { margin: 0; }
+		.hint { color: #aaa; font-size: 0.9rem; text-align: left; }
+		.container {
+			display: flex;
+
+			background: #2a2a2a;
+
+			border-radius: 12px;
+			box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+			width: 100%;
+
+			flex: 1 1 auto;
+			min-height: 0;
+		}
+		.controls{
+			padding: 12px;
+		}
+		.control-group {
+			display: flex;
+			flex-direction: column;
+			gap: 5px;
+		}
+		label { font-weight: bold; font-size: 0.85rem; color: #4af; text-transform: uppercase; letter-spacing: 0.5px; }
+		input[type="range"] { width: 100%; accent-color: #4af; }
+		.val-display { font-size: 0.85rem; color: #ccc; text-align: right; margin-top: -2px; }
+		select, button {
+			padding: 10px;
+			background: #3a3a3a;
+			color: #fff;
+			border: 1px solid #555;
+			border-radius: 6px;
+			cursor: pointer;
+			font-size: 0.95rem;
+			transition: background 0.2s;
+		}
+		select:hover, button:hover { background: #4a4a4a; border-color: #4af; }
+		button.generate-btn { background: #007acc; border: none; font-weight: bold; margin-top: auto; }
+		button.generate-btn:hover { background: #0098ff; }
+		.view-panel {
+			flex: 1 1 0;
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			justify-content: center;
+			gap: 12px;
+			min-width: 0;
+			min-height: 0;
+		}
+		.canvas-wrapper {
+			position: relative;
+			border: 4px solid #333;
+			border-radius: 8px;
+			overflow: hidden;
+			background: #000;
+			box-shadow: inset 0 0 20px rgba(0,0,0,0.8);
+			flex: 0 1 auto;
+			width: 100%;
+			min-height: min(200px, 42vh);
+			aspect-ratio: 14 / 9;
+			margin: auto;
+		}
+		/* absolute: холст не влияет на размер обертки — нет цикла layout -> resize */
+		canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+		#mainCanvas { touch-action: pan-y; }
+		#mainCanvas.over-dots { cursor: ew-resize; }
+		#mainCanvas.grabbing { cursor: grabbing; }
+		.guide-canvas { pointer-events: none; }
+		.toggle-zone { display: flex; gap: 10px; width: 100%; max-width: 420px; justify-content: center; }
+		.toggle-zone button { flex: 1; font-size: 0.85rem; padding: 6px; }
+		.toggle-zone button.active { background: #4af; color: #000; font-weight: bold; border-color: #4af; }
+		.lang-bar {
+			position: fixed;
+			top: 14px;
+			right: 18px;
+			display: flex;
+			gap: 6px;
+			z-index: 10;
+		}
+		.lang-bar button { padding: 4px 12px; font-size: 0.8rem; border-radius: 4px; }
+		.lang-bar button.active { background: #4af; color: #000; font-weight: bold; border-color: #4af; }
+		/* узкий экран: одна колонка, изображение сверху, страница скроллится как обычно */
+		@media (max-width: 1000px) {
+			:root { --canvas-max-h: 46vh; }
+			.container { flex-direction: column; flex: 0 0 auto; }
+			/* две колонки — панель вдвое ниже, страница реже скроллится */
+			.controls { flex: 0 0 auto; overflow: visible; display: grid; grid-template-columns: 1fr 1fr; align-content: start; }
+			.controls .generate-btn { grid-column: 1 / -1; margin-top: 0; }
+			.view-panel { flex: 0 0 auto; order: -1; }
+			/* узкий экран: заголовок уходит под плавающую панель языков */
+			body { height: auto; min-height: 100vh; padding-top: 52px; }
+			.title-row { padding-right: 0; }
+		}
+		@media (max-width: 620px) {
+			:root { --canvas-max-h: 44vh; }
+			.controls { grid-template-columns: 1fr; }
+		}
+	</style>
+</head>
+<body>
+
+	<div class="lang-bar" id="langBar"></div>
+
+	<div class="title-row">
+		<h3 data-i18n="title">SIRDS Stereogram Generator</h3>
+		<div class="hint" data-i18n="hint">Look at the two gray dots below the image and look "through" the image to see the 3D picture.</div>
+	</div>
+
+	<div class="container">
+		<div class="controls">
+			<div class="control-group">
+				<label for="depthPreset" data-i18n="lblDepthMap">1. Choose depth map:</label>
+				<select id="depthPreset">
+					<option value="shapes" data-i18n="optShapes">Geometric shapes (square and circle)</option>
+					<option value="torus" data-i18n="optTorus">3D ring (smooth gradient)</option>
+					<option value="text3d" data-i18n="optText3d">Text "3D LAB"</option>
+				</select>
+			</div>
+
+			<div class="control-group">
+				<label for="patternType" data-i18n="lblTexture">2. Texture type:</label>
+				<select id="patternType">
+					<option value="white" data-i18n="optWhite">White noise (black/white)</option>
+					<option value="color" data-i18n="optColor">Colored white noise</option>
+					<option value="simplex3d" data-i18n="optSimplex3d">Simplex 3D noise</option>
+					<option value="stripe" data-i18n="optStripe">Psychedelic stripes</option>
+				</select>
+			</div>
+
+			<div class="control-group">
+				<label for="patternWidth" data-i18n="lblPeriod">Pattern period (pixels):</label>
+				<input type="range" id="patternWidth" min="60" max="640" value="100">
+				<div class="val-display" id="patternWidthVal">100 px</div>
+			</div>
+
+			<div class="control-group">
+				<label for="depthFactor" data-i18n="lblDepth">Depth (3D effect strength):</label>
+				<input type="range" id="depthFactor" min="5" max="160" value="20">
+				<div class="val-display" id="depthFactorVal">20 px</div>
+			</div>
+
+			<div class="control-group">
+				<label for="noiseScale" data-i18n="lblGrain">Noise grain size:</label>
+				<input type="range" id="noiseScale" min="1" max="16" value="2">
+				<div class="val-display" id="noiseScaleVal">2 px</div>
+			</div>
+
+			<div class="control-group" style="flex-direction: row; align-items: center; gap: 10px;">
+				<input type="checkbox" id="animToggle" checked style="width: auto; accent-color: #4af;">
+				<label for="animToggle" style="text-transform: none; font-size: 0.95rem; color: #e0e0e0;" data-i18n="lblAnim">Noise animation</label>
+			</div>
+
+			<div class="control-group" style="flex-direction: row; align-items: center; gap: 10px;">
+				<input type="checkbox" id="stableNoise" checked style="width: auto; accent-color: #4af;">
+				<label for="stableNoise" style="text-transform: none; font-size: 0.95rem; color: #e0e0e0;" data-i18n="lblStableNoise">Stable noise (same seed)</label>
+			</div>
+
+			<div class="control-group">
+				<label for="noiseVx" data-i18n="lblNoiseVx">Noise move speed X:</label>
+				<input type="range" id="noiseVx" min="-8" max="8" step="0.1" value="1">
+				<div class="val-display" id="noiseVxVal">1.0 px/frame</div>
+			</div>
+
+			<div class="control-group">
+				<label for="noiseVy" data-i18n="lblNoiseVy">Noise move speed Y:</label>
+				<input type="range" id="noiseVy" min="-8" max="8" step="0.1" value="0">
+				<div class="val-display" id="noiseVyVal">0.0 px/frame</div>
+			</div>
+			<button class="generate-btn" id="renderBtn" data-i18n="btnRender">Generate Stereogram</button>
+		</div>
+
+		<div class="view-panel">
+			<div class="toggle-zone">
+				<button id="showStereoBtn" class="active" data-i18n="btnStereo">Stereogram</button>
+				<button id="showDepthBtn" data-i18n="btnDepth">Show Depth Map</button>
+			</div>
+			
+			<div class="canvas-wrapper">
+				<canvas id="mainCanvas" width="700" height="450"></canvas>
+				<canvas id="guideCanvas" class="guide-canvas" width="700" height="450"></canvas>
+			</div>
+		</div>
+	</div>
+
+	<script>
+		// --- I18N: плоская таблица [en, ru, cn, jp] ---
+		const LANGS = ['en', 'ru', 'cn', 'jp'];
+		const LANG_TAGS = { en: 'en', ru: 'ru', cn: 'zh', jp: 'ja' };
+		const LANG_LABELS = { en: 'EN', ru: 'RU', cn: '中文', jp: 'JP' };
+		const I18N = {
+			title: ['SIRDS Stereogram Generator', 'SIRDS Стереограмм Генератор', 'SIRDS 立体图生成器', 'SIRDS ステレオグラム生成'],
+			hint: [
+				'Look at the two gray dots below the image and look "through" the image to see the 3D picture.',
+				'Смотрите на две серые точки под картинкой и глядя «сквозь» нее, увидите объемное 3D-изображение.',
+				'注视图像底部的两个灰色圆点，透过画面看，即可看到立体的 3D 图像。',
+				'画像下部の 2 つのグレーの点を見つめ、画面を「通り越えて」見ると立体的な 3D 画像が見えてきます。'
+			],
+			lblDepthMap: ['1. Choose depth map:', '1. Выберите карту глубин:', '1. 选择深度图：', '1. 深度マップを選択：'],
+			optShapes: ['Geometric shapes (square and circle)', 'Геометрические фигуры (Квадрат и Круг)', '几何图形（正方形与圆形）', '幾何図形（正方形と円）'],
+			optTorus: ['3D ring (smooth gradient)', '3D Кольцо (Плавный градиент)', '3D 圆环（平滑渐变）', '3D リング（なめらかなグラデーション）'],
+			optText3d: ['Text "3D LAB"', 'Текст "3D LAB"', '文字 "3D LAB"', '文字 "3D LAB"'],
+			lblTexture: ['2. Texture type:', '2. Тип текстуры:', '2. 纹理类型：', '2. テクスチャの種類：'],
+			optWhite: ['White noise (black/white)', 'Белый шум (черно-белый)', '白噪声（黑白）', 'ホワイトノイズ（白黒）'],
+			optBw: ['Black-and-white noise (easier to focus)', 'Черно-белый шум (Легче для фокуса)', '黑白噪声（更容易对焦）', '白黒ノイズ（ピントが合わせやすい）'],
+			optColor: ['Colored white noise', 'Цветной белый шум', '彩色白噪声', 'カラーホワイトノイズ'],
+			optSimplex3d: ['Simplex 3D noise', 'Simplex 3D шум', 'Simplex 3D 噪声', 'Simplex 3D ノイズ'],
+			optStripe: ['Psychedelic stripes', 'Психоделические полосы', '迷幻条纹', 'サイケデリックなストライプ'],
+			lblPeriod: ['Pattern period (pixels):', 'Период паттерна (глаза):', '图案周期（像素）：', 'パターン周期（ピクセル）：'],
+			lblDepth: ['Depth (3D effect strength):', 'Глубина (сила 3D-эффекта):', '深度（3D 效果强度）：', '奥行き（3D 効果の強さ）：'],
+			lblGrain: ['Noise grain size:', 'Размер зерна шума:', '噪声颗粒大小：', 'ノイズの粒の大きさ：'],
+			lblAnim: ['Noise animation', 'Анимация шума', '噪声动画', 'ノイズのアニメーション'],
+			lblStableNoise: ['Stable noise (same seed)', 'Стабильный шум (тот же seed)', '稳定噪声（相同种子）', '安定ノイズ（同じシード）'],
+			lblNoiseVx: ['Noise move speed X:', 'Скорость движения шума X:', '噪声移动速度 X：', 'ノイズ移動速度 X：'],
+			lblNoiseVy: ['Noise move speed Y:', 'Скорость движения шума Y:', '噪声移动速度 Y：', 'ノイズ移動速度 Y：'],
+			btnRender: ['Generate Stereogram', 'Сгенерировать Стереограмму', '生成立体图', 'ステレオグラムを生成'],
+			btnStereo: ['Stereogram', 'Готовая Стереограмма', '立体图', 'ステレオグラム'],
+			btnDepth: ['Show Depth Map', 'Показать Карту Глубин', '显示深度图', '深度マップを表示'],
+			langBar: ['Language', 'Язык', '语言', '言語']
+		};
+
+		let lang = 'en';
+		const langBarEl = document.getElementById('langBar');
+
+		function t(key) {
+			const row = I18N[key];
+			if (!row) return key;
+			const i = LANGS.indexOf(lang);
+			return row[i < 0 ? 0 : i];
+		}
+
+		function applyLang() {
+			document.title = t('title');
+			document.documentElement.lang = LANG_TAGS[lang] || 'en';
+			langBarEl.setAttribute('aria-label', t('langBar'));
+			document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
+			for (const btn of langBarEl.children) btn.classList.toggle('active', btn.dataset.code === lang);
+		}
+
+		function setLang(code) {
+			if (LANGS.indexOf(code) < 0) return;
+			lang = code;
+			applyLang();
+			saveSettings();
+		}
+
+		LANGS.forEach(code => {
+			const btn = document.createElement('button');
+			btn.type = 'button';
+			btn.dataset.code = code;
+			btn.textContent = LANG_LABELS[code];
+			btn.title = LANG_LABELS[code];
+			btn.addEventListener('click', () => setLang(code));
+			langBarEl.appendChild(btn);
+		});
+
+		const seed = 1;
+		let animFrame = 0;
+		let isAnimating = true;
+
+		function hashNoise(x, y, channel = 0, frame = 0) {
+			// Deterministic hash PRNG. Stable mode keeps frame at zero; unstable mode evolves it.
+			const h = Math.sin(x * 12.9898 + y * 78.233 + channel * 37.719 + seed * 11.17 + frame * 19.19) * 43758.5453123;
+			return h - Math.floor(h);
+		}
+
+		// Compact, seeded 3D simplex noise (smooth coherent noise with an animated Z axis).
+		const simplexPerm = (() => {
+			const arr = new Uint8Array(256);
+			for (let i = 0; i < 256; i++) arr[i] = i;
+			let state = 0x9e3779b9 ^ seed;
+			function rnd() {
+				state |= 0;
+				state = (state + 0x6D2B79F5) | 0;
+				let t = Math.imul(state ^ (state >>> 15), 1 | state);
+				t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+				return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+			}
+			for (let i = 255; i > 0; i--) {
+				const j = Math.floor(rnd() * (i + 1));
+				const tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+			}
+			const perm = new Uint8Array(512);
+			for (let i = 0; i < 512; i++) perm[i] = arr[i & 255];
+			return perm;
+		})();
+
+		const simplexGrad3 = [
+			[1,1,0],[-1,1,0],[1,-1,0],[-1,-1,0],
+			[1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1],
+			[0,1,1],[0,-1,1],[0,1,-1],[0,-1,-1]
+		];
+
+		function simplex3(xin, yin, zin) {
+			const F3 = 1 / 3, G3 = 1 / 6;
+			const s = (xin + yin + zin) * F3;
+			const i = Math.floor(xin + s), j = Math.floor(yin + s), k = Math.floor(zin + s);
+			const t = (i + j + k) * G3;
+			const X0 = i - t, Y0 = j - t, Z0 = k - t;
+			const x0 = xin - X0, y0 = yin - Y0, z0 = zin - Z0;
+
+			let i1, j1, k1, i2, j2, k2;
+			if (x0 >= y0) {
+				if (y0 >= z0) { i1=1; j1=0; k1=0; i2=1; j2=1; k2=0; }
+				else if (x0 >= z0) { i1=1; j1=0; k1=0; i2=1; j2=0; k2=1; }
+				else { i1=0; j1=0; k1=1; i2=1; j2=0; k2=1; }
+			} else {
+				if (y0 < z0) { i1=0; j1=0; k1=1; i2=0; j2=1; k2=1; }
+				else if (x0 < z0) { i1=0; j1=1; k1=0; i2=0; j2=1; k2=1; }
+				else { i1=0; j1=1; k1=0; i2=1; j2=1; k2=0; }
+			}
+
+			const x1 = x0 - i1 + G3, y1 = y0 - j1 + G3, z1 = z0 - k1 + G3;
+			const x2 = x0 - i2 + 2 * G3, y2 = y0 - j2 + 2 * G3, z2 = z0 - k2 + 2 * G3;
+			const x3 = x0 - 1 + 3 * G3, y3 = y0 - 1 + 3 * G3, z3 = z0 - 1 + 3 * G3;
+			const ii = i & 255, jj = j & 255, kk = k & 255;
+
+			function corner(x, y, z, gi) {
+				let tt = 0.6 - x*x - y*y - z*z;
+				if (tt < 0) return 0;
+				const g = simplexGrad3[gi % 12];
+				tt *= tt;
+				return tt * tt * (g[0]*x + g[1]*y + g[2]*z);
+			}
+
+			const gi0 = simplexPerm[ii + simplexPerm[jj + simplexPerm[kk]]];
+			const gi1 = simplexPerm[ii + i1 + simplexPerm[jj + j1 + simplexPerm[kk + k1]]];
+			const gi2 = simplexPerm[ii + i2 + simplexPerm[jj + j2 + simplexPerm[kk + k2]]];
+			const gi3 = simplexPerm[ii + 1 + simplexPerm[jj + 1 + simplexPerm[kk + 1]]];
+			return 32 * (corner(x0,y0,z0,gi0) + corner(x1,y1,z1,gi1) + corner(x2,y2,z2,gi2) + corner(x3,y3,z3,gi3));
+		}
+
+		const canvas = document.getElementById('mainCanvas');
+		const ctx = canvas.getContext('2d', { willReadFrequently: true });
+		const guideCanvas = document.getElementById('guideCanvas');
+		const guideCtx = guideCanvas.getContext('2d');
+		const GUIDE_TAU = Math.PI * 2;
+		const GUIDE_R = 9;		// радиус точки
+		const GUIDE_HIT = 22;	// зона захвата вокруг точки
+		const GUIDE_MIN_SEP = 40;
+		let guideDrag = false;
+		const guidePos = { l: 0, r: 0 };
+		const guidePtr = { x: 0, y: 0 };
+
+		function clampPatternWidth(v) {
+			const min = parseInt(patternWidthInput.min);
+			const max = parseInt(patternWidthInput.max);
+			return Math.min(Math.max(Math.round(v), min), max);
+		}
+
+		// The guide dots are a second pattern-period slider. Their separation mirrors the
+		// Pattern period GUI slider, and dragging them writes back into that slider.
+		function guideSeparation() {
+			return clampPatternWidth(parseInt(patternWidthInput.value));
+		}
+
+		function updateGuidePos() {
+			const w = guideCanvas.width;
+			const sep = Math.min(Math.max(GUIDE_MIN_SEP, guideSeparation()), w * 0.95);
+			guidePos.l = (w - sep) * 0.5;
+			guidePos.r = guidePos.l + sep;
+		}
+
+		// Точки фиксации: две залитые точки с темной обводкой (видны на любом шуме)
+		function drawGuides() {
+			const w = guideCanvas.width;
+			const h = guideCanvas.height;
+			guideCtx.clearRect(0, 0, w, h);
+			if (w < 4 || h < 4) return;
+
+			updateGuidePos();
+			const y = h - 28;
+			guideCtx.fillStyle = '#e0e0e0';
+			guideCtx.strokeStyle = '#000000';
+			guideCtx.lineWidth = 3;
+			guideCtx.beginPath();
+			guideCtx.arc(guidePos.l, y, GUIDE_R, 0, GUIDE_TAU);
+			guideCtx.arc(guidePos.r, y, GUIDE_R, 0, GUIDE_TAU);
+			guideCtx.stroke();
+			guideCtx.fill();
+		}
+
+		function guidePointer(e) {
+			const rect = canvas.getBoundingClientRect();
+			guidePtr.x = rect.width > 0 ? (e.clientX - rect.left) * (canvas.width / rect.width) : 0;
+			guidePtr.y = rect.height > 0 ? (e.clientY - rect.top) * (canvas.height / rect.height) : 0;
+		}
+
+		function overGuideDot(e) {
+			guidePointer(e);
+			if (Math.abs(guidePtr.y - (guideCanvas.height - 28)) > GUIDE_HIT) return false;
+			return Math.abs(guidePtr.x - guidePos.l) <= GUIDE_HIT || Math.abs(guidePtr.x - guidePos.r) <= GUIDE_HIT;
+		}
+
+		// Pair of dots behaves like a slider: drag either dot and the other mirrors it.
+		function dragGuides(e) {
+			guidePointer(e);
+			const w = guideCanvas.width;
+			const maxVisibleSep = Math.min(parseInt(patternWidthInput.max), w * 0.95);
+			const nextSep = Math.min(Math.max(2 * Math.abs(guidePtr.x - w * 0.5), parseInt(patternWidthInput.min)), maxVisibleSep);
+			const nextValue = String(clampPatternWidth(nextSep));
+			if (patternWidthInput.value !== nextValue) {
+				patternWidthInput.value = nextValue;
+				updateSlidersDisplay();
+				updateExecution();
+				saveSettings();
+			} else {
+				drawGuides();
+			}
+		}
+
+		canvas.addEventListener('pointerdown', e => {
+			if (!overGuideDot(e)) return;
+			guideDrag = true;
+			canvas.setPointerCapture(e.pointerId);
+			canvas.classList.add('grabbing');
+			dragGuides(e);
+			e.preventDefault();
+		});
+
+		canvas.addEventListener('pointermove', e => {
+			if (guideDrag) { dragGuides(e); return; }
+			canvas.classList.toggle('over-dots', overGuideDot(e));
+		});
+
+		for (const ev of ['pointerup', 'pointercancel']) canvas.addEventListener(ev, e => {
+			if (!guideDrag) return;
+			guideDrag = false;
+			canvas.classList.remove('grabbing');
+			if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+		});
+
+		// Элементы управления
+		const depthPreset = document.getElementById('depthPreset');
+		const patternType = document.getElementById('patternType');
+		const patternWidthInput = document.getElementById('patternWidth');
+		const depthFactorInput = document.getElementById('depthFactor');
+		const noiseScaleInput = document.getElementById('noiseScale');
+		const noiseVxInput = document.getElementById('noiseVx');
+		const noiseVyInput = document.getElementById('noiseVy');
+		const renderBtn = document.getElementById('renderBtn');
+		const showStereoBtn = document.getElementById('showStereoBtn');
+		const showDepthBtn = document.getElementById('showDepthBtn');
+		const animToggle = document.getElementById('animToggle');
+		const stableNoiseToggle = document.getElementById('stableNoise');
+
+		// Буферы для хранения состояний
+		let depthDataBuffer = null; 
+		let currentMode = 'stereo'; // 'stereo' или 'depth'
+
+		// Обновление значений в интерфейсе
+		function updateSlidersDisplay() {
+			document.getElementById('patternWidthVal').innerText = patternWidthInput.value + ' px';
+			document.getElementById('depthFactorVal').innerText = depthFactorInput.value + ' px';
+			document.getElementById('noiseScaleVal').innerText = noiseScaleInput.value + ' px';
+			document.getElementById('noiseVxVal').innerText = Number(noiseVxInput.value).toFixed(1) + ' px/frame';
+			document.getElementById('noiseVyVal').innerText = Number(noiseVyInput.value).toFixed(1) + ' px/frame';
+		}
+
+		[patternWidthInput, depthFactorInput, noiseScaleInput, noiseVxInput, noiseVyInput].forEach(input => {
+			input.addEventListener('input', () => {
+				updateSlidersDisplay();
+				updateExecution();
+				saveSettings();
+			});
+		});
+
+		// --- ГЕНЕРАЦИЯ КАРТ ГЛУБИН (Программная замена картинок) ---
+		function generateDepthMap(type) {
+			const w = canvas.width;
+			const h = canvas.height;
+			ctx.fillStyle = '#000000'; // Черный фон — самый глубокий уровень (задний план)
+			ctx.fillRect(0, 0, w, h);
+
+			if (type === 'shapes') {
+				// Квадрат (средняя глубина)
+				ctx.fillStyle = 'rgb(140, 140, 140)';
+				ctx.fillRect(150, 120, 180, 180);
+				
+				// Круг (ближе всего к зрителю)
+				ctx.fillStyle = 'rgb(255, 255, 255)';
+				ctx.beginPath();
+				ctx.arc(460, 210, 100, 0, Math.PI * 2);
+				ctx.fill();
+			} 
+			else if (type === 'torus') {
+				// Плавное 3D кольцо через градиент
+				const centerX = w / 2;
+				const centerY = h / 2;
+				const maxR = 140;
+				const minR = 50;
+
+				for (let y = 0; y < h; y++) {
+					for (let x = 0; x < w; x++) {
+						const dx = x - centerX;
+						const dy = y - centerY;
+						const dist = Math.sqrt(dx*dx + dy*dy);
+
+						if (dist >= minR && dist <= maxR) {
+							// Находим пик тора (середина кольца)
+							const mid = (minR + maxR) / 2;
+							const thickness = (maxR - minR) / 2;
+							const distanceFromPeak = Math.abs(dist - mid);
+							// Плавный завал к краям кольца
+							const intensity = Math.max(0, 1 - (distanceFromPeak / thickness));
+							const color = Math.floor(intensity * 230); // Яркость
+
+							ctx.fillStyle = `rgb(${color},${color},${color})`;
+							ctx.fillRect(x, y, 1, 1);
+						}
+					}
+				}
+			} 
+			else if (type === 'text3d') {
+				// 3D Надпись
+				ctx.font = 'bold 110px sans-serif';
+				ctx.textAlign = 'center';
+				ctx.textBaseline = 'middle';
+				
+				// Слой подложки (чуть дальше)
+				ctx.fillStyle = 'rgb(150, 150, 150)';
+				ctx.fillText('3D LAB', w / 2 - 5, h / 2 - 5);
+				
+				// Основной текст (ближе)
+				ctx.fillStyle = 'rgb(255, 255, 255)';
+				ctx.fillText('3D LAB', w / 2, h / 2);
+			}
+
+			// Сохраняем карту глубин в буфер
+			depthDataBuffer = ctx.getImageData(0, 0, w, h);
+		}
+
+		// --- АЛГОРИТМ SIRDS СТЕРЕОГРАММЫ ---
+		function renderSirds() {
+			const w = canvas.width;
+			const h = canvas.height;
+			
+			// Считываем настройки
+			const basePeriod = parseInt(patternWidthInput.value);
+			const depthScale = parseInt(depthFactorInput.value);
+			const pType = patternType.value === 'bw' ? 'white' : patternType.value;
+			const noiseScale = parseInt(noiseScaleInput.value);
+			const stableNoise = stableNoiseToggle.checked;
+			const moveX = animFrame * parseFloat(noiseVxInput.value);
+			const moveY = animFrame * parseFloat(noiseVyInput.value);
+			const timeZ = stableNoise ? 0 : animFrame * 0.045;
+			const hashFrame = stableNoise ? 0 : animFrame;
+
+			// Получаем карту глубин из буфера
+			const depthPixels = depthDataBuffer.data;
+			
+			// Создаем массив выходного изображения
+			const outputImgData = ctx.createImageData(w, h);
+			const outPixels = outputImgData.data;
+			
+			// Генерируем одну строку случайного шума/текстуры для повторения
+			function getPatternPixel(x, y) {
+				// Grain quantization is applied after pan offset, so stable white noise moves
+				// as one persistent pattern instead of being regenerated every frame.
+				const sx = x - moveX;
+				const sy = y - moveY;
+				const nx = Math.floor(sx / noiseScale) * noiseScale;
+				const ny = Math.floor(sy / noiseScale) * noiseScale;
+				
+				if (pType === 'white') {
+					const rand = hashNoise(nx, ny, 0, hashFrame) > 0.5 ? 255 : 0;
+					return [rand, rand, rand];
+				} else if (pType === 'color') {
+					const r = Math.floor(hashNoise(nx, ny, 0, hashFrame) * 256);
+					const g = Math.floor(hashNoise(nx, ny, 1, hashFrame) * 256);
+					const b = Math.floor(hashNoise(nx, ny, 2, hashFrame) * 256);
+					return [r, g, b];
+				} else if (pType === 'simplex3d') {
+					const n = simplex3(sx / (noiseScale * 18), sy / (noiseScale * 18), timeZ);
+					const val = Math.max(0, Math.min(255, Math.floor((n * 0.5 + 0.5) * 255)));
+					return [val, val, val];
+				} else if (pType === 'stripe') {
+					const val = Math.floor((Math.sin((sx) * 0.15 + timeZ * 12) + 1) * 127);
+					const r = (val + (Math.floor(sy) % 30) * 4 + 255) % 255;
+					return [r, val, 255 - val];
+				}
+				return [0,0,0];
+			}
+
+			// Алгоритм сдвига пикселей (SIRDS) построчно
+			for (let y = 0; y < h; y++) {
+				// Инициализируем связи пикселей в строке (каждый указывает сам на себя)
+				const sameArr = new Int32Array(w);
+				for (let x = 0; x < w; x++) sameArr[x] = x;
+				
+				// Связываем левые и правые глаза в зависимости от глубины
+				for (let x = 0; x < w; x++) {
+					// Индекс в массиве ImageData (4 байта на пиксель: R,G,B,A)
+					const idx = (y * w + x) * 4;
+					const rValue = depthPixels[idx]; // берем красный канал как уровень глубины (0..255)
+					const z = rValue / 255.0; // нормализация к 0.0 - 1.0
+					
+					// Смещение зависит от базового периода и глубины Z.
+					// depthScale определяет, насколько сильно Z влияет на сжатие периода.
+					const shiftReduction = z * depthScale;
+					const stereoShift = Math.max(1, Math.floor(basePeriod - shiftReduction));
+					const left = Math.floor(x - stereoShift / 2);
+					const right = left + stereoShift;
+					
+					if (left >= 0 && right < w) {
+						sameArr[right] = left; // пиксель справа должен скопировать пиксель слева
+					}
+				}
+				
+				// Временный кэш цветов для текущей строки
+				const rowColors = new Array(w);
+				
+				// Заполняем строку цветами на основе связей пикселей
+				for (let x = 0; x < w; x++) {
+					if (sameArr[x] === x) {
+						// Если пиксель свободен, генерируем для него случайный шум из паттерна
+						rowColors[x] = getPatternPixel(x, y);
+					} else {
+						// Если пиксель связан с левым — копируем цвет левой точки
+						rowColors[x] = rowColors[sameArr[x]];
+					}
+					
+					// Записываем результат в массив вывода
+					const outIdx = (y * w + x) * 4;
+					outPixels[outIdx] = rowColors[x][0]; // R
+					outPixels[outIdx + 1] = rowColors[x][1]; // G
+					outPixels[outIdx + 2] = rowColors[x][2]; // B
+					outPixels[outIdx + 3] = 255; // Alpha (непрозрачно)
+				}
+			}
+			
+			// Выводим готовую стереограмму на холст
+			ctx.putImageData(outputImgData, 0, 0);
+		}
+
+		// --- АНИМАЦИЯ ШУМА ---
+		function animationLoop() {
+			if (isAnimating && currentMode === 'stereo') {
+				animFrame++;
+				renderSirds();
+			}
+			requestAnimationFrame(animationLoop);
+		}
+
+		// --- УПРАВЛЕНИЕ И ПЕРЕКЛЮЧЕНИЕ РЕЖИМОВ ---
+		function updateExecution() {
+			generateDepthMap(depthPreset.value);
+			if (currentMode === 'stereo') {
+				renderSirds();
+			} else {
+				// Если режим карты глубин — просто оставляем отрисованную карту на экране
+				ctx.putImageData(depthDataBuffer, 0, 0);
+			}
+			drawGuides();
+		}
+
+		// Переключение анимации
+		animToggle.addEventListener('change', () => {
+			isAnimating = animToggle.checked;
+			saveSettings();
+		});
+
+		stableNoiseToggle.addEventListener('change', () => {
+			updateExecution();
+			saveSettings();
+		});
+
+		// Кнопка принудительного рендера
+		renderBtn.addEventListener('click', () => {
+			currentMode = 'stereo';
+			showStereoBtn.classList.add('active');
+			showDepthBtn.classList.remove('active');
+			updateExecution();
+		});
+
+		// Переключение вкладок просмотра
+		showStereoBtn.addEventListener('click', () => {
+			currentMode = 'stereo';
+			showStereoBtn.classList.add('active');
+			showDepthBtn.classList.remove('active');
+			renderSirds();
+			saveSettings();
+		});
+
+		showDepthBtn.addEventListener('click', () => {
+			currentMode = 'depth';
+			showDepthBtn.classList.add('active');
+			showStereoBtn.classList.remove('active');
+			ctx.putImageData(depthDataBuffer, 0, 0);
+			saveSettings();
+		});
+
+		// Смена пресета карты глубин автоматически обновляет холст
+		depthPreset.addEventListener('change', () => {
+			updateExecution();
+			saveSettings();
+		});
+		patternType.addEventListener('change', () => {
+			updateExecution();
+			saveSettings();
+		});
+
+		function saveSettings() {
+			const settings = {
+				depthPreset: depthPreset.value,
+				patternType: patternType.value,
+				patternWidth: patternWidthInput.value,
+				depthFactor: depthFactorInput.value,
+				noiseScale: noiseScaleInput.value,
+				stableNoise: stableNoiseToggle.checked,
+				noiseVx: noiseVxInput.value,
+				noiseVy: noiseVyInput.value,
+				isAnimating: animToggle.checked,
+				currentMode: currentMode,
+				lang: lang
+			};
+			localStorage.setItem('sirdsSettings', JSON.stringify(settings));
+		}
+
+		function loadSettings() {
+			try {
+				const raw = localStorage.getItem('sirdsSettings');
+				if (!raw) return;
+				const s = JSON.parse(raw);
+				if (s.depthPreset) depthPreset.value = s.depthPreset;
+				if (s.patternType) patternType.value = s.patternType === 'bw' ? 'white' : s.patternType;
+				if (s.patternWidth) patternWidthInput.value = s.patternWidth;
+				if (s.depthFactor) depthFactorInput.value = s.depthFactor;
+				if (s.noiseScale) noiseScaleInput.value = s.noiseScale;
+				if (typeof s.stableNoise === 'boolean') stableNoiseToggle.checked = s.stableNoise;
+				if (s.noiseVx !== undefined) noiseVxInput.value = s.noiseVx;
+				if (s.noiseVy !== undefined) noiseVyInput.value = s.noiseVy;
+				if (typeof s.isAnimating === 'boolean') {
+					animToggle.checked = s.isAnimating;
+					isAnimating = s.isAnimating;
+				}
+				if (s.currentMode) currentMode = s.currentMode;
+				if (LANGS.indexOf(s.lang) >= 0) lang = s.lang;
+			} catch(e) { /* ignore corrupt data */ }
+		}
+
+		loadSettings();
+		applyLang();
+		updateSlidersDisplay();
+		updateExecution();
+
+		requestAnimationFrame(animationLoop);
+
+		function resizeCanvas() {
+			const wrapper = canvas.parentElement;
+			const newWidth = wrapper.clientWidth;
+			const newHeight = wrapper.clientHeight;
+
+			if (newWidth > 0 && newHeight > 0) {
+				canvas.width = newWidth;
+				canvas.height = newHeight;
+				guideCanvas.width = newWidth;
+				guideCanvas.height = newHeight;
+
+				updateExecution();
+			}
+		}
+
+		const resizeObserver = new ResizeObserver(() => {
+			resizeCanvas();
+		});
+		resizeObserver.observe(canvas.parentElement);
+
+		setTimeout(resizeCanvas, 0);
+	</script>
+</body>
+</html>

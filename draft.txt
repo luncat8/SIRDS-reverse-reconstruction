@@ -1,0 +1,10 @@
+make plan
+
+get generator with simple noise from https://github.com/luncat8/SIRDS-stereo-image/gf.html
+
+think how possible to reverse process. search internet for existing approaches.
+
+implement some tests
+
+implement visual html to generate and reverse and see result
+

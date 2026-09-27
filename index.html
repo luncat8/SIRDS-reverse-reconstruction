@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>SIRDS round trip lab</title>
+	<style>
+		* { box-sizing: border-box; }
+		body {
+			margin: 0;
+			padding: 16px;
+			background: #141414;
+			color: #e0e0e0;
+			font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+		}
+		h1 { margin: 0 0 4px; font-size: 18px; }
+		.hint { margin: 0 0 14px; color: #9a9a9a; font-size: 13px; }
+		.lab { display: flex; gap: 14px; align-items: flex-start; }
+		.controls {
+			flex: 0 0 250px;
+			background: #222;
+			border: 1px solid #333;
+			border-radius: 8px;
+			padding: 12px;
+			display: flex;
+			flex-direction: column;
+			gap: 10px;
+		}
+		.views {
+			flex: 1 1 auto;
+			display: grid;
+			grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+			gap: 12px;
+		}
+		figure { margin: 0; background: #222; border: 1px solid #333; border-radius: 8px; padding: 10px; }
+		figcaption { font-size: 12px; color: #4af; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+		.stats { font-size: 12px; color: #bdbdbd; margin-top: 6px; white-space: pre-line; font-variant-numeric: tabular-nums; }
+		canvas { display: block; width: 100%; height: auto; background: #000; border-radius: 4px; image-rendering: pixelated; }
+		canvas.strip { image-rendering: pixelated; }
+		fieldset { border: 1px solid #3a3a3a; border-radius: 6px; margin: 0; padding: 8px 10px 10px; }
+		legend { font-size: 11px; color: #7f7f7f; text-transform: uppercase; letter-spacing: 0.5px; padding: 0 4px; }
+		label { display: block; font-size: 12px; color: #9a9a9a; }
+		.row { display: flex; justify-content: space-between; align-items: baseline; }
+		.val { color: #e0e0e0; font-variant-numeric: tabular-nums; }
+		input[type="range"] { width: 100%; accent-color: #4af; }
+		select, button, .file-btn {
+			width: 100%;
+			padding: 8px;
+			background: #333;
+			color: #fff;
+			border: 1px solid #4a4a4a;
+			border-radius: 6px;
+			cursor: pointer;
+			font-size: 13px;
+		}
+		select:hover, button:hover, .file-btn:hover { background: #3f3f3f; }
+		button.primary { background: #0a6fb5; border-color: #0a6fb5; font-weight: 600; }
+		button.primary:hover { background: #0d86d6; }
+		button:disabled { opacity: 0.45; cursor: default; }
+		#drop { border: 1px dashed #4a4a4a; border-radius: 6px; padding: 10px; text-align: center; color: #9a9a9a; font-size: 12px; }
+		#drop.over { border-color: #4af; color: #4af; }
+		#file { display: none; }
+	</style>
+</head>
+<body>
+
+	<h1>SIRDS round trip lab</h1>
+	<p class="hint">Generate a stereogram from a height map, then recover the height map and the base pattern from the pixels alone. Free-view the stereogram (diverge your eyes, or look through it) to see the 3D picture; the recovered map must match the input everywhere except the masked seams and the unencoded border band.</p>
+
+	<div class="lab">
+		<div class="controls">
+			<fieldset>
+				<legend>Input</legend>
+				<label for="preset">Height map</label>
+				<select id="preset">
+					<option value="shapes">Geometric shapes</option>
+					<option value="torus">3D ring (smooth)</option>
+					<option value="ramp">Horizontal ramp</option>
+					<option value="text3d">Text "3D LAB"</option>
+					<option value="flat">Flat background</option>
+				</select>
+			</fieldset>
+
+			<fieldset>
+				<legend>Generator</legend>
+				<label class="row" for="P">Pattern period P <span class="val" id="Pv">100</span></label>
+				<input type="range" id="P" min="60" max="320" step="1" value="100">
+				<label class="row" for="depthScale">Depth strength <span class="val" id="depthScalev">20</span></label>
+				<input type="range" id="depthScale" min="5" max="160" step="1" value="20">
+				<label class="row" for="noiseScale">Noise grain <span class="val" id="noiseScalev">2</span></label>
+				<input type="range" id="noiseScale" min="1" max="16" step="1" value="2">
+			</fieldset>
+
+			<fieldset>
+				<legend>Reverse</legend>
+				<label class="row" for="winX">Match window X <span class="val" id="winXv">4</span></label>
+				<input type="range" id="winX" min="1" max="12" step="1" value="4">
+				<label class="row" for="winY">Match window Y <span class="val" id="winYv">2</span></label>
+				<input type="range" id="winY" min="1" max="8" step="1" value="2">
+				<label class="row" for="confRel">Confidence cut <span class="val" id="confRelv">0.020</span></label>
+				<input type="range" id="confRel" min="0" max="0.2" step="0.005" value="0.02">
+			</fieldset>
+
+			<button class="primary" id="genBtn">Generate + reverse</button>
+			<button id="regenBtn" disabled>Re-generate from recovered</button>
+
+			<fieldset>
+				<legend>External SIRDS</legend>
+				<div id="drop">drop an image here or<br>
+					<label class="file-btn" for="file">choose file</label>
+				</div>
+				<input type="file" id="file" accept="image/*">
+				<button id="clearBtn" style="margin-top:8px">Back to generated input</button>
+			</fieldset>
+		</div>
+
+		<div class="views">
+			<figure>
+				<figcaption>Height map (input)</figcaption>
+				<canvas id="depthCv" width="640" height="400"></canvas>
+				<div class="stats" id="depthStats"></div>
+			</figure>
+			<figure>
+				<figcaption id="sirdsCap">Stereogram (generated)</figcaption>
+				<canvas id="sirdsCv" width="640" height="400"></canvas>
+			</figure>
+			<figure>
+				<figcaption>Recovered height (tinted by match residual: pure red = no pixel-exact match)</figcaption>
+				<canvas id="recCv" width="640" height="400"></canvas>
+				<div class="stats" id="recStats">not reversed yet</div>
+			</figure>
+			<figure>
+				<figcaption id="errCap">Error |s_rec - s_gt| (round trip only)</figcaption>
+				<canvas id="errCv" width="640" height="400"></canvas>
+				<div class="stats" id="errStats"></div>
+			</figure>
+			<figure>
+				<figcaption>Recovered base pattern (P x h, holes in red)</figcaption>
+				<canvas id="stripCv" class="strip" width="100" height="400"></canvas>
+			</figure>
+		</div>
+	</div>
+
+	<script src="sirds.js"></script>
+	<script>
+		'use strict';
+
+		const W = 640;
+		const H = 400;
+
+		const depthCv = document.getElementById('depthCv');
+		const sirdsCv = document.getElementById('sirdsCv');
+		const recCv = document.getElementById('recCv');
+		const errCv = document.getElementById('errCv');
+		const stripCv = document.getElementById('stripCv');
+		const depthCtx = depthCv.getContext('2d', { willReadFrequently: true });
+		const sirdsCtx = sirdsCv.getContext('2d', { willReadFrequently: true });
+		const recCtx = recCv.getContext('2d');
+		const errCtx = errCv.getContext('2d');
+		const stripCtx = stripCv.getContext('2d');
+
+		const el = {
+			preset: document.getElementById('preset'),
+			P: document.getElementById('P'),
+			depthScale: document.getElementById('depthScale'),
+			noiseScale: document.getElementById('noiseScale'),
+			winX: document.getElementById('winX'),
+			winY: document.getElementById('winY'),
+			confRel: document.getElementById('confRel'),
+			genBtn: document.getElementById('genBtn'),
+			regenBtn: document.getElementById('regenBtn'),
+			clearBtn: document.getElementById('clearBtn'),
+			file: document.getElementById('file'),
+			drop: document.getElementById('drop'),
+			depthStats: document.getElementById('depthStats'),
+			recStats: document.getElementById('recStats'),
+			errStats: document.getElementById('errStats'),
+			sirdsCap: document.getElementById('sirdsCap'),
+			errCap: document.getElementById('errCap'),
+			Pv: document.getElementById('Pv'),
+			depthScalev: document.getElementById('depthScalev'),
+			noiseScalev: document.getElementById('noiseScalev'),
+			winXv: document.getElementById('winXv'),
+			winYv: document.getElementById('winYv'),
+			confRelv: document.getElementById('confRelv')
+		};
+
+		const params = SIRDS.defaultParams();
+		const height = new Uint8Array(W * H);
+		const sirds = new Uint8ClampedArray(W * H * 4);
+		const sirdsImage = sirdsCtx.createImageData(W, H);
+		const recImage = recCtx.createImageData(W, H);
+		const errImage = errCtx.createImageData(W, H);
+		const scratch = SIRDS.createScratch(W);
+		let rev = SIRDS.createReverseOut(W, H, params);
+		const sirdsRef = new Uint8ClampedArray(W * H * 4);
+		let sGt = null;
+		let timeGen = 0;
+		let timeRev = 0;
+
+		function readParams() {
+			params.P = +el.P.value;
+			params.depthScale = +el.depthScale.value;
+			params.noiseScale = +el.noiseScale.value;
+			params.winX = +el.winX.value;
+			params.winY = +el.winY.value;
+			params.confRel = +el.confRel.value;
+			params.sMin = Math.max(1, params.P - params.depthScale);
+			params.sMax = params.P;
+		}
+
+		function showParams() {
+			el.Pv.textContent = params.P + ' px';
+			el.depthScalev.textContent = params.depthScale + ' px';
+			el.noiseScalev.textContent = params.noiseScale + ' px';
+			el.winXv.textContent = params.winX;
+			el.winYv.textContent = params.winY;
+			el.confRelv.textContent = params.confRel.toFixed(3);
+		}
+
+		function buildHeight() {
+			if (el.preset.value !== 'text3d') {
+				SIRDS.depthPreset(el.preset.value, W, H, height);
+				const img = depthCtx.createImageData(W, H);
+				const d = img.data;
+				for (let i = 0, o = 0; i < height.length; i++, o += 4) {
+					d[o] = d[o + 1] = d[o + 2] = height[i];
+					d[o + 3] = 255;
+				}
+				depthCtx.putImageData(img, 0, 0);
+				return;
+			}
+			// text preset needs the 2D canvas, so it lives here and feeds the
+			// same height array every other path uses
+			depthCtx.fillStyle = '#000';
+			depthCtx.fillRect(0, 0, W, H);
+			depthCtx.font = 'bold 150px sans-serif';
+			depthCtx.textAlign = 'center';
+			depthCtx.textBaseline = 'middle';
+			depthCtx.fillStyle = 'rgb(150, 150, 150)';
+			depthCtx.fillText('3D LAB', W / 2 - 6, H / 2 - 6);
+			depthCtx.fillStyle = 'rgb(255, 255, 255)';
+			depthCtx.fillText('3D LAB', W / 2, H / 2);
+			const src = depthCtx.getImageData(0, 0, W, H).data;
+			for (let i = 0, o = 0; i < height.length; i++, o += 4) height[i] = src[o];
+		}
+
+		function generate() {
+			buildHeight();
+			const t0 = performance.now();
+			SIRDS.generateSirds(height, W, H, params, sirds, scratch);
+			timeGen = performance.now() - t0;
+			sirdsImage.data.set(sirds);
+			sirdsRef.set(sirds);
+			sirdsCtx.putImageData(sirdsImage, 0, 0);
+			sGt = new Int16Array(W * H);
+			for (let i = 0; i < sGt.length; i++) sGt[i] = SIRDS.sFromZ(height[i] / 255, params);
+			el.sirdsCap.textContent = 'Stereogram (generated)';
+			el.errCap.textContent = 'Error |s_rec - s_gt| (round trip only)';
+		}
+
+		// grays |s_rec - s_gt| per pixel; a recovered s of 0 means "not evaluable"
+		// and is drawn as neutral rather than as an error of magnitude P
+		function drawError() {
+			const d = errImage.data;
+			for (let i = 0, o = 0; i < sGt.length; i++, o += 4) {
+				const sr = rev.s[i];
+				const e = sr === 0 ? 0 : Math.min(255, Math.abs(sr - sGt[i]) * 24);
+				d[o] = d[o + 1] = d[o + 2] = e;
+				d[o + 3] = 255;
+			}
+			errCtx.putImageData(errImage, 0, 0);
+		}
+
+		function roundTripStats() {
+			let n = 0, exact = 0, within1 = 0, conf = 0, confWithin1 = 0, zMae = 0;
+			for (let y = 0; y < H; y++) {
+				for (let x = 0; x < W; x++) {
+					const i = y * W + x;
+					const sg = sGt[i];
+					const l = x - Math.ceil(sg / 2);
+					if (l - params.winX < 0 || l + sg + params.winX >= W) continue;
+					if (y < params.winY || y >= H - params.winY) continue;
+					n++;
+					const sr = rev.s[i];
+					if (sr !== 0 && Math.abs(sr - sg) <= 1) within1++;
+					if (sr === sg) exact++;
+					if (rev.conf[i] >= 1 - params.confRel) {
+						conf++;
+						if (sr !== 0 && Math.abs(sr - sg) <= 1) confWithin1++;
+					}
+					zMae += Math.abs(rev.z[i] - SIRDS.zFromS(sg, params));
+				}
+			}
+			if (n === 0) return 'no evaluable pixels';
+			const pc = (a) => (100 * a / n).toFixed(1) + '%';
+			return ['evaluable ' + n + ' px',
+				'exact ' + pc(exact) + '   within-1 ' + pc(within1),
+				'confident ' + pc(conf) + '   of those within-1 ' + (conf === 0 ? 'n/a' : (100 * confWithin1 / conf).toFixed(1) + '%'),
+				'z MAE ' + (zMae / n).toFixed(4)].join('\n');
+		}
+
+		function reverse() {
+			readParams();
+			rev = SIRDS.createReverseOut(W, H, params);
+			const t0 = performance.now();
+			SIRDS.reverseSirds(sirds, W, H, params, rev, scratch);
+			timeRev = performance.now() - t0;
+			drawRecovered();
+			if (sGt) {
+				drawError();
+				el.errStats.textContent = roundTripStats();
+				el.errCap.textContent = 'Error |s_rec - s_gt| (round trip only)';
+			} else {
+				errCtx.clearRect(0, 0, W, H);
+				el.errStats.textContent = 'reverse-only mode: no ground truth to compare';
+				el.errCap.textContent = 'Error map (needs a generated input)';
+			}
+			el.recStats.textContent = 'reverse ' + timeRev.toFixed(0) + ' ms';
+			el.regenBtn.disabled = sGt === null;
+		}
+
+		function drawRecovered() {
+			const d = recImage.data;
+			for (let i = 0, o = 0; i < rev.z.length; i++, o += 4) {
+				const g = Math.round(rev.z[i] * 255);
+				// continuous tint: a smooth gradient misses the exact separation
+				// over most of its ramp but is still recovered within one step, so
+				// a binary mask would throw away the useful part of the signal
+				const t = 1 - rev.conf[i];
+				d[o] = g + (255 - g) * t;
+				d[o + 1] = g * (1 - t);
+				d[o + 2] = g * (1 - t);
+				d[o + 3] = 255;
+			}
+			recCtx.putImageData(recImage, 0, 0);
+			const P = params.P;
+			stripCv.width = P;
+			const stripImage = stripCtx.createImageData(P, H);
+			const sd = stripImage.data;
+			for (let y = 0; y < H; y++) {
+				for (let j = 0; j < P; j++) {
+					const i = j + y * P;
+					const o = i * 4;
+					if (!rev.patternValid[i]) {
+						sd[o] = 255; sd[o + 1] = 40; sd[o + 2] = 40;
+					} else {
+						sd[o] = sd[o + 1] = sd[o + 2] = rev.pattern[i];
+					}
+					sd[o + 3] = 255;
+				}
+			}
+			stripCtx.putImageData(stripImage, 0, 0);
+		}
+
+		// rebuild the SIRDS from the recovered s map, treating low-confidence
+		// pixels as background - the honest way to regenerate from a lossy read
+		function regenerateFromRecovered() {
+			if (!sGt) return;
+			const cut = 1 - params.confRel;
+			for (let i = 0; i < height.length; i++) {
+				const s = rev.s[i];
+				height[i] = s === 0 || rev.conf[i] < cut ? 0 : SIRDS.heightFromS(s, params);
+			}
+			SIRDS.generateSirds(height, W, H, params, sirds, scratch);
+			sirdsImage.data.set(sirds);
+			sirdsCtx.putImageData(sirdsImage, 0, 0);
+			let same = 0;
+			for (let i = 0, o = 0; i < W * H; i++, o += 4) if (sirds[o] === sirdsRef[o]) same++;
+			el.depthStats.textContent = 'regenerated: ' + (100 * same / (W * H)).toFixed(2) + '% of red-channel samples identical to the input stereogram';
+			drawError();
+			el.errStats.textContent = roundTripStats();
+		}
+
+		function loadImageFile(file) {
+			const img = new Image();
+			const url = URL.createObjectURL(file);
+			img.onload = () => {
+				URL.revokeObjectURL(url);
+				const ctx = sirdsCtx;
+				ctx.fillStyle = '#000';
+				ctx.fillRect(0, 0, W, H);
+				const scale = Math.min(W / img.width, H / img.height);
+				const dw = Math.max(1, Math.round(img.width * scale));
+				const dh = Math.max(1, Math.round(img.height * scale));
+				ctx.drawImage(img, Math.floor((W - dw) / 2), Math.floor((H - dh) / 2), dw, dh);
+				sirds.set(ctx.getImageData(0, 0, W, H).data);
+				sGt = null;
+				el.sirdsCap.textContent = 'Stereogram (uploaded, letterboxed)';
+				reverse();
+			};
+			img.onerror = () => {
+				URL.revokeObjectURL(url);
+				el.depthStats.textContent = 'could not decode that file as an image';
+			};
+			img.src = url;
+		}
+
+		function resetToGenerated() {
+			generate();
+			reverse();
+			el.depthStats.textContent = 'generate ' + timeGen.toFixed(0) + ' ms';
+		}
+
+		for (const input of [el.P, el.depthScale, el.noiseScale, el.winX, el.winY, el.confRel]) {
+			input.addEventListener('input', () => { readParams(); showParams(); });
+		}
+		el.genBtn.addEventListener('click', () => {
+			readParams();
+			showParams();
+			generate();
+			reverse();
+			el.depthStats.textContent = 'generate ' + timeGen.toFixed(0) + ' ms';
+		});
+		el.regenBtn.addEventListener('click', regenerateFromRecovered);
+		el.clearBtn.addEventListener('click', resetToGenerated);
+		el.preset.addEventListener('change', () => { resetToGenerated(); });
+		el.file.addEventListener('change', () => { if (el.file.files[0]) loadImageFile(el.file.files[0]); });
+		el.drop.addEventListener('dragover', (e) => { e.preventDefault(); el.drop.classList.add('over'); });
+		el.drop.addEventListener('dragleave', () => el.drop.classList.remove('over'));
+		el.drop.addEventListener('drop', (e) => {
+			e.preventDefault();
+			el.drop.classList.remove('over');
+			const file = e.dataTransfer.files[0];
+			if (file) loadImageFile(file);
+		});
+
+		showParams();
+		resetToGenerated();
+	</script>
+</body>
+</html>
